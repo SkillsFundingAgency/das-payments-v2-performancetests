@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading.Tasks;
 using Autofac;
 using Bogus;
@@ -18,14 +20,14 @@ using SFA.DAS.Payments.Application.Repositories;
 using SFA.DAS.Payments.DataLocks.Messages.Internal;
 using SFA.DAS.Payments.EarningEvents.Messages.Internal.Commands;
 using SFA.DAS.Payments.FundingSource.Messages.Internal.Commands;
-using SFA.DAS.Payments.Messages.Core;
-using SFA.DAS.Payments.Messages.Core.Commands;
-using SFA.DAS.Payments.Messages.Core.Events;
+using SFA.DAS.Payments.Messages.Common;
+using SFA.DAS.Payments.Messages.Common.Commands;
+using SFA.DAS.Payments.Messages.Common.Events;
 using SFA.DAS.Payments.Model.Core;
 using SFA.DAS.Payments.Model.Core.Entities;
 using SFA.DAS.Payments.Monitoring.Jobs.Client;
 using SFA.DAS.Payments.Monitoring.Jobs.Data;
-using SFA.DAS.Payments.Monitoring.Jobs.Messages.Commands;
+using SFA.DAS.Payments.Monitoring.Jobs.DataMessages.Commands;
 using SFA.DAS.Payments.Monitoring.Jobs.Model;
 using SFA.DAS.Payments.ProviderPayments.Messages.Internal.Commands;
 using Learner = SFA.DAS.Payments.AcceptanceTests.Core.Data.Learner;
@@ -35,16 +37,12 @@ namespace SFA.DAS.Payments.PerformanceTests
     [TestFixture]
     public class EndToEndPerformanceTests : TestsBase
     {
-        protected IMessageSession MessageSession { get; private set; }
-        protected EndpointConfiguration EndpointConfiguration { get; private set; }
-        protected IContainer Container { get; private set; }
-        protected Autofac.ContainerBuilder Builder { get; private set; }
-        protected Dictionary<string, DateTime> LearnerStartTimes { get; private set; }
-
-        [NUnit.Framework.OneTimeSetUp]
+        [OneTimeSetUp]
         public async Task SetUpContainer()
         {
+            const int maxEntityName = 50;
             var config = new TestsConfiguration();
+
             Builder = new ContainerBuilder();
             Builder.RegisterType<TestsConfiguration>().SingleInstance();
             Builder.RegisterType<DcHelper>().SingleInstance();
@@ -64,21 +62,25 @@ namespace SFA.DAS.Payments.PerformanceTests
             Builder.RegisterInstance(transportConfig)
                 .As<TransportExtensions<AzureServiceBusTransport>>()
                 .SingleInstance();
-            transportConfig
-                .UseForwardingTopology()
-                .ConnectionString(config.ServiceBusConnectionString)
+
+
+            //Uses built in ForwardingTopology
+            transportConfig.ConnectionString(config.ServiceBusConnectionString)
                 .Transactions(TransportTransactionMode.ReceiveOnly);
             var routing = transportConfig.Routing();
             routing.RouteToEndpoint(typeof(ProcessLearnerCommand), EndpointNames.EarningEvents);
-            routing.RouteToEndpoint(typeof(ProcessProviderMonthEndAct1CompletionPaymentCommand), EndpointNames.ProviderPayments);
+            routing.RouteToEndpoint(typeof(ProcessProviderMonthEndAct1CompletionPaymentCommand),
+                EndpointNames.ProviderPayments);
             routing.RouteToEndpoint(typeof(RecordEarningsJob), EndpointNames.JobMonitoring);
             routing.RouteToEndpoint(typeof(ProcessLevyPaymentsOnMonthEndCommand).Assembly, EndpointNames.FundingSource);
             routing.RouteToEndpoint(typeof(ResetActorsCommand).Assembly, EndpointNames.DataLocks);
 
-            var sanitization = transportConfig.Sanitization();
-            var strategy = sanitization.UseStrategy<ValidateAndHashIfNeeded>();
-            strategy.RuleNameSanitization(
-                ruleNameSanitizer: ruleName => ruleName.Split('.').LastOrDefault() ?? ruleName);
+            //This replaces ValidateAndHashIfNeeded flag.
+            transportConfig.SubscriptionNameShortener(ruleName => ruleName.Split('.').LastOrDefault() ?? ruleName);
+            transportConfig.SubscriptionNameShortener(n => n.Length > maxEntityName ? HashName(n) : n);
+            transportConfig.RuleNameShortener(
+                ruleName => ruleName.Split('.').LastOrDefault() ?? ruleName);
+
             EndpointConfiguration.UseSerialization<NewtonsoftSerializer>();
             EndpointConfiguration.EnableInstallers();
 
@@ -107,17 +109,42 @@ namespace SFA.DAS.Payments.PerformanceTests
 
             Container = Builder.Build();
             EndpointConfiguration.UseContainer<AutofacBuilder>(c => c.ExistingLifetimeScope(Container));
-            MessageSession = await Container.Resolve<IEndpointInstanceFactory>().GetEndpointInstance().ConfigureAwait(false);//    await Endpoint.Start(EndpointConfiguration);
+            MessageSession = await Container.Resolve<IEndpointInstanceFactory>().GetEndpointInstance()
+                .ConfigureAwait(false); //    await Endpoint.Start(EndpointConfiguration);
             LearnerStartTimes = new Dictionary<string, DateTime>();
         }
 
+        [OneTimeTearDown]
+        public void CleanUpContainer()
+        {
+        }
+
+        private static string HashName(string input)
+        {
+            var inputBytes = Encoding.Default.GetBytes(input);
+            // use MD5 hash to get a 16-byte hash of the string
+            using (var provider = new MD5CryptoServiceProvider())
+            {
+                var hashBytes = provider.ComputeHash(inputBytes);
+                return new Guid(hashBytes).ToString();
+            }
+        }
+
+        protected IMessageSession MessageSession { get; private set; }
+        protected EndpointConfiguration EndpointConfiguration { get; private set; }
+        protected IContainer Container { get; private set; }
+        protected ContainerBuilder Builder { get; private set; }
+        protected Dictionary<string, DateTime> LearnerStartTimes { get; private set; }
+
 
         [TestCase(1, 2, 0, 1, 5)]
-        public async Task Repeatable_Ukprn_And_Uln(int providerCount, int providerLearnerAct1Count, int providerLearnerAct2Count, byte collectionPeriod, int secondsToWaitForPeriodEnd)
+        public async Task Repeatable_Ukprn_And_Uln(int providerCount, int providerLearnerAct1Count,
+            int providerLearnerAct2Count, byte collectionPeriod, int secondsToWaitForPeriodEnd)
         {
             Randomizer.Seed = new Random(8675309);
             var sessions = Enumerable.Range(1, providerCount)
-                .Select(i => new TestSession(new RandomUkprnService(Container.Resolve<TestPaymentsDataContext>()), new RandomUlnService()))
+                .Select(i => new TestSession(new RandomUkprnService(Container.Resolve<TestPaymentsDataContext>()),
+                    new RandomUlnService()))
                 .ToList();
             var ilrSubmissions = new List<Task>();
 
@@ -157,7 +184,7 @@ namespace SFA.DAS.Payments.PerformanceTests
             var jobId = sessions.FirstOrDefault().GenerateId();
             var commands = sessions.Select(session => new ProcessLevyPaymentsOnMonthEndCommand
             {
-                CollectionPeriod = new CollectionPeriod {AcademicYear = 1819, Period = collectionPeriod},
+                CollectionPeriod = new CollectionPeriod { AcademicYear = 1819, Period = collectionPeriod },
                 AccountId = session.Ukprn,
                 JobId = jobId
             }).ToList();
@@ -197,7 +224,7 @@ namespace SFA.DAS.Payments.PerformanceTests
                 EstimatedStartDate = startDate,
                 ApprenticeshipPriceEpisodes = new List<ApprenticeshipPriceEpisodeModel>
                 {
-                    new ApprenticeshipPriceEpisodeModel
+                    new()
                     {
                         StartDate = startDate,
                         Cost = 15000M
@@ -205,9 +232,11 @@ namespace SFA.DAS.Payments.PerformanceTests
                 }
             }).ToList();
             var ulns = apprenticeships.Select(appr => appr.Uln.ToString()).Join();
-            var sql = $"Delete from Payments2.ApprenticeshipDuplicate where ApprenticeshipId in (select Id from Payments2.Apprenticeship where Uln in ({ulns}))";
+            var sql =
+                $"Delete from Payments2.ApprenticeshipDuplicate where ApprenticeshipId in (select Id from Payments2.Apprenticeship where Uln in ({ulns}))";
             await dataContext.Database.ExecuteSqlCommandAsync(sql);
-            sql = $"Delete from Payments2.ApprenticeshipPriceEpisode where ApprenticeshipId in (select Id from Payments2.Apprenticeship where Uln in ({ulns}))";
+            sql =
+                $"Delete from Payments2.ApprenticeshipPriceEpisode where ApprenticeshipId in (select Id from Payments2.Apprenticeship where Uln in ({ulns}))";
             await dataContext.Database.ExecuteSqlCommandAsync(sql);
             sql = $"Delete from Payments2.Apprenticeship where Uln in ({ulns})";
             await dataContext.Database.ExecuteSqlCommandAsync(sql);
@@ -224,7 +253,6 @@ namespace SFA.DAS.Payments.PerformanceTests
                 })
                 .ConfigureAwait(false);
             await Task.Delay(2000).ConfigureAwait(false);
-
         }
 
         private async Task AddEmployerAccount(TestSession session)
@@ -250,15 +278,15 @@ namespace SFA.DAS.Payments.PerformanceTests
             var startTime = DateTimeOffset.UtcNow;
             var sendOptions = new SendOptions();
             var commands = ilrLearners.Select(learner => new ProcessLearnerCommand
-            {
-                JobId = session.JobId,
-                CollectionPeriod = collectionPeriod,
-                CollectionYear = 1920,
-                IlrSubmissionDateTime = session.IlrSubmissionTime,
-                SubmissionDate = session.IlrSubmissionTime,
-                Ukprn = session.Ukprn,
-                Learner = learner
-            })
+                {
+                    JobId = session.JobId,
+                    CollectionPeriod = collectionPeriod,
+                    CollectionYear = 1920,
+                    IlrSubmissionDateTime = session.IlrSubmissionTime,
+                    SubmissionDate = session.IlrSubmissionTime,
+                    Ukprn = session.Ukprn,
+                    Learner = learner
+                })
                 .ToList();
             var generatedMessages = commands.Select(command => new GeneratedMessage
             {
@@ -270,13 +298,9 @@ namespace SFA.DAS.Payments.PerformanceTests
             await dcHelper.SendIlrSubmission(ilrLearners, session.Ukprn, 1819, (byte)collectionPeriod, session.JobId);
         }
 
-        [OneTimeTearDown]
-        public void CleanUpContainer()
-        {
-
-        }
-
-        public async Task CreateJob(long jobId, long? ukprn, DateTime? ilrSubmissionTime, DateTimeOffset startTime, List<GeneratedMessage> generatedMessages, byte collectionPeriod, JobType jobType = JobType.ComponentAcceptanceTestEarningsJob)
+        public async Task CreateJob(long jobId, long? ukprn, DateTime? ilrSubmissionTime, DateTimeOffset startTime,
+            List<GeneratedMessage> generatedMessages, byte collectionPeriod,
+            JobType jobType = JobType.ComponentAcceptanceTestEarningsJob)
         {
             var job = new JobModel
             {
@@ -303,7 +327,8 @@ namespace SFA.DAS.Payments.PerformanceTests
                 Status = JobStepStatus.Queued
             }));
             await dataContext.SaveChangesAsync();
-            Console.WriteLine($"Finished creating job and generated messages. Job id: {job.Id}, Test DC Job id: {job.DcJobId}");
+            Console.WriteLine(
+                $"Finished creating job and generated messages. Job id: {job.Id}, Test DC Job id: {job.DcJobId}");
         }
     }
 }
