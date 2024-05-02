@@ -8,6 +8,7 @@ using Autofac;
 using Bogus;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Internal;
+using Microsoft.Extensions.Configuration;
 using NServiceBus;
 using NServiceBus.Features;
 using NUnit.Framework;
@@ -41,6 +42,14 @@ namespace SFA.DAS.Payments.PerformanceTests
         public async Task SetUpContainer()
         {
             const int maxEntityName = 50;
+            var configuration = new ConfigurationBuilder()
+                .AddJsonFile($"appsettings.json");
+            configuration.Build();
+            /*
+            var config = configuration.Build();
+            var connectionString = config.GetConnectionString("ConnectionString");
+            */
+
             var config = new TestsConfiguration();
 
             Builder = new ContainerBuilder();

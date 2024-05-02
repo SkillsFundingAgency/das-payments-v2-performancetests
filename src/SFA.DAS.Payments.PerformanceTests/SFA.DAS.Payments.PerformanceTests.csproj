@@ -7,6 +7,8 @@
   <ItemGroup>
     <PackageReference Include="Autofac" Version="8.0.0" />
     <PackageReference Include="Bogus" Version="35.5.0" />
+    <PackageReference Include="Microsoft.Extensions.Configuration" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="8.0.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.9.0" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.1" />
     <PackageReference Include="NUnit" Version="4.1.0" />
@@ -22,6 +24,12 @@
     <PackageReference Include="SFA.DAS.Payments.ProviderPayments.Messages" Version="0.0.69" />
     <PackageReference Include="SFA.DAS.Payments.ProviderPayments.Messages.Core" Version="1.1.0" />
     <PackageReference Include="SFA.DAS.Payments.ProviderPayments.Messages.Internal" Version="1.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>
