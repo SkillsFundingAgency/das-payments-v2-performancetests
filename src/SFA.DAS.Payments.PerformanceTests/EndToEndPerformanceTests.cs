@@ -42,16 +42,15 @@ namespace SFA.DAS.Payments.PerformanceTests
         public async Task SetUpContainer()
         {
             const int maxEntityName = 50;
-            var configuration = new ConfigurationBuilder()
-                .AddJsonFile($"appsettings.json");
-            configuration.Build();
-            /*
-            var config = configuration.Build();
-            var connectionString = config.GetConnectionString("ConnectionString");
-            */
+            var config = new PerformanceTestConfiguration(new ConfigurationBuilder()
+                .AddJsonFile($"appsettings.json", optional: false, reloadOnChange: true));
 
-            var config = new TestsConfiguration();
-
+            if (config.Environment.ToUpper() is "LOCAL" or "DEVELOPMENT")
+            {
+                config = new PerformanceTestConfiguration(new ConfigurationBuilder().
+                    AddJsonFile($"appsettings.{config.Environment}.json", optional: true, reloadOnChange: true));
+            }
+            
             Builder = new ContainerBuilder();
             Builder.RegisterType<TestsConfiguration>().SingleInstance();
             Builder.RegisterType<DcHelper>().SingleInstance();
